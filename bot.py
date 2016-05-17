@@ -3,6 +3,7 @@
 from __future__ import print_function
 import interface as bbox
 import numpy as np
+import copy
 np.random.seed(1335)  # for reproducibility
 
  
@@ -22,7 +23,7 @@ def prepare_bbox():
         n_actions = bbox.get_num_of_actions()
         max_time = bbox.get_max_time()
 
-def calc_best_action_using_checkpoint():
+def calc_best_action_using_checkpoint(action_range=50):
 	
 	# Pretty straightforward — we create a checkpoint and get it's ID 
 	checkpoint_id = bbox.create_checkpoint()
@@ -31,7 +32,7 @@ def calc_best_action_using_checkpoint():
 	best_score = -1e9
  
 	for action in range(n_actions):
-		for _ in range(4):
+		for _ in range(action_range): #random.randint(1,100)
 			bbox.do_action(action)
 		
 		if bbox.get_score() > best_score:
@@ -54,32 +55,37 @@ def run_bbox(verbose=False, epsilon=0.1, gamma=0.99, action_repeat=4, update_fre
     h=0
     if load_weights:
         model.load_weights('my_model_weights.h5')
+        model_prim.load_weights('my_model_weights.h5')
     #stores tuples of (S, A, R, S')
  
     while has_next:
         # Get current environment state
-        state = bbox.get_state()
-        prev_reward = bbox.get_score()
+        state = copy.copy(bbox.get_state())
+        prev_reward = copy.copy(bbox.get_score())
         
         #Run the Q function on S to get predicted reward values on all the possible actions
         qval = model.predict(state.reshape(1,n_features), batch_size=1)
  
         # Choose an action to perform at current step
-        if random.random() < epsilon: #choose random action
-            action = np.random.randint(0,n_actions) #assumes 4 different actions
+        if random.random() < epsilon: #choose random action or best action
+            if random.random() < 0.5:
+                action = np.random.randint(0,n_actions) #assumes 4 different actions
+            else: # Use checkpoints to prime network with good actions
+                action_range=50 #random.randint(1,200)
+                action = calc_best_action_using_checkpoint(action_range=action_range)
+                #for _ in range(action_range):
+                #    has_next = bbox.do_action(action)
         else: #choose best action from Q(s,a) values
             action = (np.argmax(qval))
-#        # Use checkpoints to test network setup
-#        action = calc_best_action_using_checkpoint()
-#        for _ in range(update_frequency):
-#			has_next = bbox.do_action(action)
+
 
         # Perform chosen action, observe new state S'
         # Function do_action(action) returns False if level is finished, otherwise returns True.
         for a in range(action_repeat):
             has_next = bbox.do_action(action)
-        new_state = bbox.get_state()
-        reward = bbox.get_score() - prev_reward
+        new_state = copy.copy(bbox.get_state())
+        reward = copy.copy(bbox.get_score()) - prev_reward
+        #reward = 1.0 if reward > 0.0 else -1.0 #this gives better than random when combined with a small network
 
         #Experience replay storage
         if (len(replay) < buffer): #if buffer not filled, add to it
@@ -113,19 +119,22 @@ def run_bbox(verbose=False, epsilon=0.1, gamma=0.99, action_repeat=4, update_fre
 
             X_train = np.array(X_train)
             y_train = np.array(y_train)
+            # update the weights of a copy of the network
+            model_prim.fit(X_train, y_train, batch_size=batchSize, nb_epoch=1, verbose=0)
             if update_frequency_cntr >= update_frequency:
-                model.fit(X_train, y_train, batch_size=batchSize, nb_epoch=1, verbose=0)
+                prim_weights = model_prim.get_weights()
+                print('model update')
+                model.set_weights(prim_weights)
                 update_frequency_cntr = 0
             update_frequency_cntr += 1
-            
-            if bbox.get_time() % 100000 == 0:
-                print ("time = %d, score = %f" % (bbox.get_time(), bbox.get_score()))
+
+        if bbox.get_time() % 500000 == 0:
+            print ("time = %d, score = %f" % (bbox.get_time(), bbox.get_score()))
 
 
     # Finish the game simulation, print earned reward and save weights
-    # While submitting solutions, make sure that you do call finish()
     if save_weights:
-        model.save_weights('my_model_weights.h5', overwrite=True)
+        model_prim.save_weights('my_model_weights.h5', overwrite=True)
     bbox.finish(verbose=1)
 
  
@@ -133,6 +142,7 @@ def run_bbox(verbose=False, epsilon=0.1, gamma=0.99, action_repeat=4, update_fre
 if __name__ == "__main__":
 
     from keras.models import Sequential
+    from keras.models import model_from_json
     from keras.layers.core import Dense, Dropout, Activation
     from keras.optimizers import RMSprop
     import random
@@ -144,41 +154,61 @@ if __name__ == "__main__":
     model.add(Activation('relu'))
     #model.add(Dropout(0.2))
     
-    model.add(Dense(100, init='lecun_uniform'))
+    model.add(Dense(100, init='lecun_uniform')) #a 10 neuron network gives better than random result
     model.add(Activation('relu'))
-    #model.add(Dropout(0.2))
+    model.add(Dropout(0.2))
+    
+#    model.add(Dense(10, init='lecun_uniform'))
+#    model.add(Activation('relu'))
+#    model.add(Dropout(0.2))
 
     model.add(Dense(n_actions, init='lecun_uniform'))
     model.add(Activation('linear')) #linear output so we can have range of real-valued outputs
 
-    rms = RMSprop(lr=0.001)
+    rms = RMSprop(lr=0.00025)
     model.compile(loss='mse', optimizer=rms)
     
     json_string = model.to_json()
     open('my_model_architecture.json', 'w').write(json_string)
     # to load model architecture 'model = model_from_json(open('my_model_architecture.json').read())'
+    model_prim = model_from_json(open('my_model_architecture.json').read())
 
-    exploration_epochs = 10
-    learning_epochs = 1000
+    training = True
+    exploration_epochs = 100
+    learning_epochs = 100
     epsilon = 1 #1 is random
-    gamma = 0.99 #a high gamma makes a long term reward more valuable
+    gamma = 0.999 #a high gamma makes a long term reward more valuable
     action_repeat = 4 #repeat each action this many times
-    update_frequency = 500 #the number of actions selected between each Q-net update
-    batchSize = 32
-    buffer = 200000
+    update_frequency = 1000 #the number of time steps between each Q-net update
+    batchSize = 128
+    buffer = 300000
     load_weights = True
     
-    for i in range(exploration_epochs):
-        print(i, epsilon, gamma, action_repeat, update_frequency, batchSize, buffer)
-        run_bbox(verbose=0, epsilon=epsilon, gamma=gamma, action_repeat=action_repeat, update_frequency=update_frequency, batchSize=batchSize, buffer=buffer, load_weights=False, save_weights=False)
-        if epsilon > 0.1:
-            epsilon -= (1.0/exploration_epochs)
+    if training:
+        for i in range(exploration_epochs):
+            print(i, epsilon, gamma, action_repeat, update_frequency, batchSize, buffer)
+            run_bbox(verbose=0, epsilon=epsilon, gamma=gamma, action_repeat=action_repeat, update_frequency=update_frequency, batchSize=batchSize, buffer=buffer, load_weights=False, save_weights=True)
+            if epsilon > 0.1:
+                epsilon -= (1.0/exploration_epochs)
 
-    for i in range(learning_epochs):
-        epsilon = 0.1
-        print(i, epsilon, gamma, action_repeat, update_frequency, batchSize, buffer)
-        run_bbox(verbose=0, epsilon=epsilon, gamma=gamma, action_repeat=action_repeat, update_frequency=update_frequency, batchSize=batchSize, buffer=buffer, load_weights=load_weights, save_weights=True)
-        load_weights = False
+        for i in range(learning_epochs):
+            epsilon = 0.1
+            print(i, epsilon, gamma, action_repeat, update_frequency, batchSize, buffer)
+            run_bbox(verbose=0, epsilon=epsilon, gamma=gamma, action_repeat=action_repeat, update_frequency=update_frequency, batchSize=batchSize, buffer=buffer, load_weights=load_weights, save_weights=True)
+            load_weights = False
 
-
-
+    else:
+        has_next = 1
+        # Prepare environment - load the game level
+        prepare_bbox()
+        model.load_weights('_my_model_weights.h5')
+        while has_next:
+            # Get current environment state
+            state = copy.copy(bbox.get_state())
+            #Run the Q function on S to get predicted reward values on all the possible actions
+            qval = model.predict(state.reshape(1,n_features), batch_size=1)
+            # Choose an action to perform at current step
+            action = (np.argmax(qval))
+            has_next = bbox.do_action(action)
+        # Finish the game simulation
+        bbox.finish(verbose=1)
