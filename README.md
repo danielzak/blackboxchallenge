@@ -1,7 +1,7 @@
 # blackboxchallenge
-Code for the self reinformcement learning competition at blackboxchallenge.com
+Code for the self reinforcement learning competition at www.blackboxchallenge.com
 
-This is a self reinforcement learning submission using a neural network for the blackbox challenge at www.blackboxchallenge.com. Most of the tricks from DeepMinds Atari paper are included in some form. If there is structure in the data it should find it eventually. One trick I'm using (without success it seems) is to prime the network with both random exploration as well as optimal actions using checkpoints.
+This is a self reinforcement learning submission using a neural network. Most of the tricks from DeepMinds Atari paper are included in some form. If there is structure in the data it should find it eventually :-) One trick I'm using (without success it seems) is to prime the network with both random exploration as well as optimal actions using checkpoints.
 
 It uses a 100 neuron neural network:
 * Has one value for a number of learning epochs with a high (but decreasing) exploration rate
